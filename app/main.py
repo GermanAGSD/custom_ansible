@@ -2,8 +2,8 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from . import models
-from .database import engine
-from .routers import post, user, auth, vote
+# from .database import engine
+from .routers import post, user, auth, vote, sse_stream
 from .config import settings
 
 
@@ -20,11 +20,11 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-app.include_router(post.router)
-app.include_router(user.router)
-app.include_router(auth.router)
-app.include_router(vote.router)
+# app.include_router(neuro.router)
+app.include_router(sse_stream.router)
+# app.include_router(user.router)
+# app.include_router(auth.router)
+# app.include_router(vote.router)
 
 
 @app.get("/")

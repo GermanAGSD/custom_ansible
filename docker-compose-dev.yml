@@ -3,7 +3,7 @@ services:
   api:
     build: .
     ports:
-      - 8000:8000
+      - 8001:8000
     volumes:
       - ./:/usr/src/app
     # env_file:
@@ -23,6 +23,8 @@ services:
 
   postgres:
     image: postgres
+    ports:
+      - 5432:5432
     environment:
       - POSTGRES_PASSWORD=password123
       - POSTGRES_DB=fastapi
