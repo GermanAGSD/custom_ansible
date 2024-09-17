@@ -1,21 +1,36 @@
 from sse_starlette.sse import EventSourceResponse
 from fastapi import FastAPI, Response, status, HTTPException, Depends, Request, APIRouter, Query, File, UploadFile
-from random import choice, randrange
-import asyncio
-import time, json
-from sqlalchemy import func
-# from ..database import conn, cursor, get_db
-from ..database import get_db
+# from fastapi import FastAPI, Response, status, HTTPException, Depends, APIRouter
 from sqlalchemy.orm import Session
-import psycopg2
-from .. import models
-from concurrent.futures import ThreadPoolExecutor
+from typing import List, Optional
+from sqlalchemy import func
+# from sqlalchemy.sql.functions import func
+from .. import models, schemas, oauth2
+from ..database import SessionLocal, engine, get_db
 import paramiko
+from sqlalchemy import create_engine
+from sqlalchemy.ext.declarative import declarative_base
+from sqlalchemy.orm import sessionmaker
+from sqlalchemy.orm import Session
+from sqlalchemy import text
+from .. schemas import HostResponse
 import os
 router = APIRouter(
     prefix="/api/v1/ansible",
     tags=['ansible']
 )
+
+# SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+
+# Base = declarative_base()
+
+
+# def get_db():
+#     db = SessionLocal()
+#     try:
+#         yield db
+#     finally:
+#         db.close()
 
 
 def connect_and_execute_certificate(hostname, credentials, command, id_rsa_key):
@@ -65,7 +80,7 @@ def connect_and_execute_certificate(hostname, credentials, command, id_rsa_key):
 
 
 # Функция для подключения и выполнения команды на сервере
-def connect_and_execute_paaswd(hostname, credentials, command):
+async def connect_and_execute_paaswd(hostname, credentials, command):
     client = paramiko.SSHClient()
     client.set_missing_host_key_policy(paramiko.AutoAddPolicy())  # Автоматически добавлять ключи хоста
     
@@ -105,7 +120,7 @@ def connect_and_execute_paaswd(hostname, credentials, command):
         client.close()
 
 # Функция для отправки файла на сервер через SFTP в стандартный путь (/tmp)
-def upload_file_to_server(hostname, credentials, local_file_path):
+async def upload_file_to_server(hostname, credentials, local_file_path):
     client = paramiko.SSHClient()
     client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
     
@@ -169,7 +184,7 @@ async def execute(
     
     # Проходим по каждому хосту и выполняем команду
     for host in host_list:
-        result = connect_and_execute_paaswd(host, credentials, command)
+        result = await connect_and_execute_paaswd(host, credentials, command)
         results.append(result)
     
     # Возвращаем результаты выполнения команд на всех серверах
@@ -191,7 +206,7 @@ async def execute(
     credentials = {
         'port': ports,
         'username': 'root',  # Убедитесь, что username правильный
-        'password': passwords
+        # 'password': passwords
     }
     
     # Инициализируем список для результатов
@@ -205,40 +220,83 @@ async def execute(
     # Возвращаем результаты выполнения команд на всех серверах
     return {"results": results}
 
-
+# @router.post("/upload")
+# def upload(file: UploadFile = File(...)):
+#     try:
+#         with open(file.filename, 'wb') as f:
+#             shutil.copyfileobj(file.file, f)
+#     except Exception:
+#         return {"message": "There was an error uploading the file"}
+#     finally:
+#         file.file.close()
+        
+#     return {"message": f"Successfully uploaded {file.filename}"}
 # Маршрут для загрузки файла и отправки его на сервер
+@router.get("/hosts")
+def get_hosts(db: Session = Depends(get_db)):
+     # Выбираем только нужные поля из таблицы hosts
+    hosts = db.query(models.Hosts.id, models.Hosts.ipadress, models.Hosts.port, models.Hosts.username, models.Hosts.password).all()
+    return hosts
+
+@router.get("/host_group", response_model=List[schemas.HostType])
+def get_type(db: Session = Depends(get_db)):
+     # Выбираем только нужные поля из таблицы hosts
+    type = db.query(models.Type.id, models.Type.grouptype).all()
+    return type
+
+@router.get("/host_group_network")
+def get_network_host(db: Session = Depends(get_db)):
+    # Фильтрация записей по значению hosttype (например, "Network")
+    types = db.query(models.Hosts.id, models.Hosts.ipadress, models.Hosts.port).filter(models.Hosts.grouptype_id == 1).all()
+    return types
+
+
+@router.get("/host_group_linux")
+def get_linux_host(db: Session = Depends(get_db)):
+    # Фильтрация записей по значению hosttype (например, "Network")
+    types = db.query(models.Hosts.id, models.Hosts.ipadress, models.Hosts.port).filter(models.Hosts.grouptype_id == 2).all()
+    return types
+
+
 @router.post("/uploadfile")
-async def upload_file_to_linux(
-    hosts: str = Query(..., description="Список хостов через запятую"),
-    ports: int = 22,
-    passwords: str = Query(...),
-    file: UploadFile = File(...)
-):
-    # Преобразуем строку хостов в список
-    host_list = hosts.split(',')
+async def upload_file_to_linux(db: Session = Depends(get_db), file: UploadFile = File(...)):
+    # Извлекаем хосты и их данные из базы данных
+    hosts = db.query(models.Hosts.id, models.Hosts.ipadress, models.Hosts.port, models.Hosts.username, models.Hosts.password).all()
+    ipadress_list = [host[1] for host in hosts]
+    ports = hosts[0][2]  # Извлекаем порт для первого хоста (если у всех хостов один порт)
+    username = hosts[0][3]  # Извлекаем имя пользователя для первого хоста
+    passwd = hosts[0][4]  # Извлекаем пароль
+
+    print(f"Порты: {ports}, Имя пользователя: {username}, Пароль: {passwd}, IP адреса: {ipadress_list}")
 
     # Сохраняем файл временно на сервере
     local_file_path = f"./{file.filename}"
     with open(local_file_path, "wb") as f:
         f.write(await file.read())
-    
+
     # Создаем словарь для параметров подключения
     credentials = {
         'port': ports,
-        'username': 'root',  # Убедитесь, что username правильный
-        'password': passwords
+        'username': username,
+        'password': passwd,
     }
-    
+
     # Инициализируем список для результатов
     results = []
-    
-    # Отправляем файл на каждый хост в стандартный путь (/tmp)
-    for host in host_list:
-        result = upload_file_to_server(host, credentials, local_file_path)
-        results.append(result)
 
-    # Удаляем файл после отправки (если не нужен)
+    # Последовательная отправка файла на каждый хост
+    for host in ipadress_list:
+        print(f"Отправка файла на сервер {host}")
+        
+        # Важно использовать await для последовательного выполнения
+        result = await upload_file_to_server(host, credentials, local_file_path)
+        
+        # Добавляем результат в список
+        results.append(result)
+        print(f"Загрузка на {host} завершена с результатом: {result}")
+
+    # Удаляем файл после завершения отправки
     os.remove(local_file_path)
-    
+
     # Возвращаем результаты отправки файла на все сервера
     return {"results": results}

@@ -4,6 +4,28 @@ from typing import Optional
 
 from pydantic.types import conint
 
+# Создаем Pydantic-схему для возврата данных
+class HostResponse(BaseModel):
+    id: int
+    ipadress: str
+    port: str
+    username: str
+    # grouptype_id: int
+    # password: str
+
+    class Config:
+        orm_mode = True
+
+
+# Создаем Pydantic-схему для возврата данных
+class HostType(BaseModel):
+    id: int
+    grouptype: str
+
+
+    class Config:
+        orm_mode = True
+
 
 class PostBase(BaseModel):
     title: str

@@ -7,20 +7,20 @@ from psycopg2.extras import RealDictCursor
 import time
 from .config import settings
 
-# while True:
+while True:
 
-#     try:
-#         conn = psycopg2.connect(host='10.10.0.4', database='fastapi', user='postgres',
-#                                 password='password123', cursor_factory=RealDictCursor)
-#         cursor = conn.cursor()
-#         print("Database connection was succesfull!")
-#         break
-#     except Exception as error:
-#         print("Connecting to database failed")
-#         print("Error: ", error)
-#         time.sleep(2)
+    try:
+        conn = psycopg2.connect(host='172.30.30.19', port='5431', database='fastapi', user='postgres',
+                                password='password123', cursor_factory=RealDictCursor)
+        cursor = conn.cursor()
+        print("Database connection was succesfull!")
+        break
+    except Exception as error:
+        print("Connecting to database failed")
+        print("Error: ", error)
+        time.sleep(2)
 
-SQLALCHEMY_DATABASE_URL = "postgresql://postgres:password123@10.10.0.4:5432/fastapi"
+SQLALCHEMY_DATABASE_URL = "postgresql://postgres:password123@172.30.30.19:5431/fastapi"
 
 
 engine = create_engine(SQLALCHEMY_DATABASE_URL)
