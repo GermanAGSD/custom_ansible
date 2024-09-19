@@ -6,7 +6,7 @@ from typing import List, Optional
 from sqlalchemy import func
 # from sqlalchemy.sql.functions import func
 from .. import models, schemas, oauth2
-from ..database import SessionLocal, engine, get_db
+from ..database import SessionLocal, engine, get_db, conn, cursor
 import paramiko
 from sqlalchemy import create_engine
 from sqlalchemy.ext.declarative import declarative_base
@@ -235,7 +235,8 @@ async def execute(
 @router.get("/hosts")
 def get_hosts(db: Session = Depends(get_db)):
      # Выбираем только нужные поля из таблицы hosts
-    hosts = db.query(models.Hosts.id, models.Hosts.ipadress, models.Hosts.port, models.Hosts.username, models.Hosts.password).all()
+        # Выполняем запрос с соединением таблиц
+    hosts = db.query(models.Hosts.ipadress, models.Hosts.port, models.Hosts.username, models.Hosts.password, models.Type.grouptype).join(models.Type, models.Hosts.grouptype_id == models.Type.id).all()
     return hosts
 
 @router.get("/host_group", response_model=List[schemas.HostType])
@@ -247,19 +248,48 @@ def get_type(db: Session = Depends(get_db)):
 @router.get("/host_group_network")
 def get_network_host(db: Session = Depends(get_db)):
     # Фильтрация записей по значению hosttype (например, "Network")
-    types = db.query(models.Hosts.id, models.Hosts.ipadress, models.Hosts.port).filter(models.Hosts.grouptype_id == 1).all()
-    return types
-
+    cursor.execute("""
+    SELECT hosts.*
+    FROM hosts
+    JOIN type ON hosts.grouptype_id = type.id
+    WHERE type.grouptype = 'Network'
+""")
+    type = cursor.fetchall()
+    return type
 
 @router.get("/host_group_linux")
 def get_linux_host(db: Session = Depends(get_db)):
     # Фильтрация записей по значению hosttype (например, "Network")
-    types = db.query(models.Hosts.id, models.Hosts.ipadress, models.Hosts.port).filter(models.Hosts.grouptype_id == 2).all()
-    return types
+    cursor.execute("""
+    SELECT hosts.*
+    FROM hosts
+    JOIN type ON hosts.grouptype_id = type.id
+    WHERE type.grouptype = 'Linux Hosts'
+""")
+    type = cursor.fetchall()
+    return type
 
+
+# @router.get("/host_group_linux")
+# def get_linux_host(db: Session = Depends(get_db)):
+#     # Фильтрация записей по значению hosttype (например, "Network")
+#     conn = 
+#     return types_with_hosts
+
+# @router.get("/host_group_filter")
+# def get_hosts_by_grouptype(db: Session, group_name: str):
+#     # Выполняем запрос для получения всех хостов, относящихся к указанной группе
+#     hosts = db.query(models.Hosts).join(models.Type).filter(models.Type.grouptype == group_name).all()
+#     return hosts
 
 @router.post("/uploadfile")
-async def upload_file_to_linux(db: Session = Depends(get_db), file: UploadFile = File(...)):
+async def upload_file_to_linux(
+    db: Session = Depends(get_db),
+    file: UploadFile = File(...),
+    # hosts: str = Query(...)
+    
+    ):
+    # host_list = hosts.split(',')
     # Извлекаем хосты и их данные из базы данных
     hosts = db.query(models.Hosts.id, models.Hosts.ipadress, models.Hosts.port, models.Hosts.username, models.Hosts.password).all()
     ipadress_list = [host[1] for host in hosts]
@@ -267,7 +297,7 @@ async def upload_file_to_linux(db: Session = Depends(get_db), file: UploadFile =
     username = hosts[0][3]  # Извлекаем имя пользователя для первого хоста
     passwd = hosts[0][4]  # Извлекаем пароль
 
-    print(f"Порты: {ports}, Имя пользователя: {username}, Пароль: {passwd}, IP адреса: {ipadress_list}")
+    # print(f"Порты: {ports}, Имя пользователя: {username}, Пароль: {passwd}, IP адреса: {ipadress_list}")
 
     # Сохраняем файл временно на сервере
     local_file_path = f"./{file.filename}"
