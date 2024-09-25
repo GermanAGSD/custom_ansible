@@ -1,5 +1,5 @@
 from sse_starlette.sse import EventSourceResponse
-from fastapi import FastAPI, Response, status, HTTPException, Depends, Request, APIRouter, Query, File, UploadFile
+from fastapi import FastAPI, Response, status, HTTPException, Depends, Request, APIRouter, Query, File, UploadFile, Form
 # from fastapi import FastAPI, Response, status, HTTPException, Depends, APIRouter
 from sqlalchemy.orm import Session
 from typing import List, Optional
@@ -13,26 +13,222 @@ from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.orm import Session
 from sqlalchemy import text
-from .. schemas import HostResponse
+from .. schemas import HostResponse, HostCreateSchema, HostFileSchema, CreateHostGroup, DeleteHostGroup
 import os
+from pydantic import BaseModel, Field
+
 router = APIRouter(
     prefix="/api/v1/ansible",
     tags=['ansible']
 )
 
-# SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
-# Base = declarative_base()
+# Маршрут FastAPI для выполнения команды через SSH на нескольких серверах
+@router.get("/execPasswd")
+async def execute(
+    hosts: str = Query(..., description="Список хостов через запятую, без пробела"), 
+    ports: int = 22, 
+    passwords: str = Query(...), 
+    command: str = 'ls -la'
+):
+    # Преобразуем строку хостов в список
+    host_list = hosts.split(',')
+
+    # Создаем словарь для параметров подключения
+    credentials = {
+        'port': ports,
+        'username': 'root',  # Убедитесь, что username правильный
+        'password': passwords
+    }
+    
+    # Инициализируем список для результатов
+    results = []
+    
+    # Проходим по каждому хосту и выполняем команду
+    for host in host_list:
+        result = await connect_and_execute_paaswd(host, credentials, command)
+        results.append(result)
+    
+    # Возвращаем результаты выполнения команд на всех серверах
+    return {"results": results}
+
+# Маршрут FastAPI для выполнения команды через SSH на нескольких серверах
+@router.get("/execwithCert")
+async def execute(
+    hosts: str = Query(..., description="Список хостов через запятую, без пробела"), 
+    ports: int = 22, 
+    passphrase: str = Query(...),
+    pkkey: UploadFile = File(...),
+    command: str = 'ls -la'
+):
+    # Преобразуем строку хостов в список
+    host_list = hosts.split(',')
+
+    # Создаем словарь для параметров подключения
+    credentials = {
+        'port': ports,
+        'username': 'root',  # Убедитесь, что username правильный
+        # 'password': passwords
+    }
+    
+    # Инициализируем список для результатов
+    results = []
+    
+    # Проходим по каждому хосту и выполняем команду
+    for host in host_list:
+        result = connect_and_execute_paaswd(host, credentials, command, pkkey, passphrase)
+        results.append(result)
+    
+    # Возвращаем результаты выполнения команд на всех серверах
+    return {"results": results}
+
+@router.get("/hosts")
+def get_hosts(db: Session = Depends(get_db)):
+     # Выбираем только нужные поля из таблицы hosts
+        # Выполняем запрос с соединением таблиц
+    hosts = db.query(models.Hosts.ipadress, models.Hosts.port, models.Hosts.username, models.Hosts.password, models.Type.grouptype, models.Type.description).join(models.Type, models.Hosts.grouptype_id == models.Type.id).all()
+    return hosts
+
+@router.get("/host_group", response_model=List[schemas.HostType])
+def get_type(db: Session = Depends(get_db)):
+     # Выбираем только нужные поля из таблицы hosts
+    type = db.query(models.Type.id, models.Type.grouptype, models.Type.description).all()
+    return type
+
+@router.get("/host_group_network")
+def get_network_host(db: Session = Depends(get_db)):
+    # Фильтрация записей по значению hosttype (например, "Network")
+    cursor.execute("""
+    SELECT hosts.*
+    FROM hosts
+    JOIN type ON hosts.grouptype_id = type.id
+    WHERE type.grouptype = 'Network'
+""")
+    type = cursor.fetchall()
+    return type
+
+@router.get("/host_group_linux")
+def get_linux_host(db: Session = Depends(get_db)):
+    # Фильтрация записей по значению hosttype (например, "Network")
+    cursor.execute("""
+    SELECT hosts.*
+    FROM hosts
+    JOIN type ON hosts.grouptype_id = type.id
+    WHERE type.grouptype = 'Linux Hosts'
+""")
+    type = cursor.fetchall()
+    return type
+    
+@router.post("/create_host_group")
+def create_host_group(host_group: CreateHostGroup, db: Session = Depends(get_db)):
+    try:
+        new_group = models.Type(
+            grouptype=host_group.grouptype,
+            description=host_group.description
+        )
+
+        db.add(new_group)
+        db.commit()
+        db.refresh(new_group)
+        return {"message": "Group Type created successfully", "host": new_group}
+    except Exception as e:
+        db.rollback()  # Откат транзакции при ошибке
+        raise HTTPException(status_code=400, detail=f"An error occurred: {str(e)}")    
+
+@router.delete('/delete_group_type')
+def delete_group_type(del_group: DeleteHostGroup, db: Session = Depends(get_db)):
+    try:
+        
+        group = db.query(models.Type).filter(models.Type.id == del_group.id).first()
+    
+        if not group:
+            raise HTTPException(status_code=404, detail="Host not found")
+           
+        db.delete(group)
+        db.commit()
+        # db.refresh(group)
+        return {"message": "Group deleted", "group": group}
+    except Exception as e:
+        db.rollback()  # Откат транзакции при ошибке
+        raise HTTPException(status_code=400, detail=f"An error occurred: {str(e)}")  
+# Обработчик POST-запроса
+@router.post("/hosts")
+def create_host(host_data: HostCreateSchema, db: Session = Depends(get_db)):
+    try:
+        # Хеширование пароля перед сохранением
+        # hashed_password = bcrypt.hash(host_data.password)
+
+        # Создание нового объекта хоста
+        new_host = models.Hosts(
+            ipadress=host_data.ipadress,
+            port=host_data.port,
+            username=host_data.username,
+            password=host_data.password,  # Храним хешированный пароль
+            grouptype_id=host_data.grouptype_id
+        )
+
+        # Добавляем объект в базу данных и сохраняем изменения
+        db.add(new_host)
+        db.commit()
+        db.refresh(new_host)  # Обновляем объект с новыми данными (например, ID)
+
+        return {"message": "Host created successfully", "host": new_host}
+
+    except Exception as e:
+        db.rollback()  # Откат транзакции при ошибке
+        raise HTTPException(status_code=400, detail=f"An error occurred: {str(e)}")    
 
 
-# def get_db():
-#     db = SessionLocal()
-#     try:
-#         yield db
-#     finally:
-#         db.close()
+@router.post("/uploadfile")
+async def upload_file_to_linux(
+    db: Session = Depends(get_db),
+    file: UploadFile = File(...),
+    ports: int = 22,
+    username: str = None,
+    passwd: str = Form(...),
+    ipadress: str = Form(...),
+    ):
+    host_list = ipadress.split(',')
+    # Извлекаем хосты и их данные из базы данных
+    hosts = db.query(models.Hosts.id, models.Hosts.ipadress, models.Hosts.port, models.Hosts.username, models.Hosts.password).all()
+    # host_list = [host[1] for host in hosts]
+    # ports = hosts[0][2]  # Извлекаем порт для первого хоста (если у всех хостов один порт)
+    # username = hosts[0][3]  # Извлекаем имя пользователя для первого хоста
+    # passwd = hosts[0][4]  # Извлекаем пароль
 
+    # print(f"Порты: {ports}, Имя пользователя: {username}, Пароль: {passwd}, IP адреса: {ipadress_list}")
 
+    # Сохраняем файл временно на сервере
+    local_file_path = f"./{file.filename}"
+    with open(local_file_path, "wb") as f:
+        f.write(await file.read())
+
+    # Создаем словарь для параметров подключения
+    credentials = {
+        'port': ports,
+        'username': username,
+        'password': passwd,
+    }
+
+    # Инициализируем список для результатов
+    results = []
+
+    # Последовательная отправка файла на каждый хост
+    for host in host_list:
+        print(f"Отправка файла на сервер {host}")
+        
+        # Важно использовать await для последовательного выполнения
+        result = await upload_file_to_server(host, credentials, local_file_path)
+        
+        # Добавляем результат в список
+        results.append(result)
+        print(f"Загрузка на {host} завершена с результатом: {result}")
+
+    # Удаляем файл после завершения отправки
+    os.remove(local_file_path)
+
+    # Возвращаем результаты отправки файла на все сервера
+    return {"results": results}
 def connect_and_execute_certificate(hostname, credentials, command, id_rsa_key):
     private_key_path = id_rsa_key
     client = paramiko.SSHClient()
@@ -160,173 +356,3 @@ async def upload_file_to_server(hostname, credentials, local_file_path):
 
     finally:
         client.close()
-
-# Маршрут FastAPI для выполнения команды через SSH на нескольких серверах
-@router.get("/execPasswd")
-async def execute(
-    hosts: str = Query(..., description="Список хостов через запятую, без пробела"), 
-    ports: int = 22, 
-    passwords: str = Query(...), 
-    command: str = 'ls -la'
-):
-    # Преобразуем строку хостов в список
-    host_list = hosts.split(',')
-
-    # Создаем словарь для параметров подключения
-    credentials = {
-        'port': ports,
-        'username': 'root',  # Убедитесь, что username правильный
-        'password': passwords
-    }
-    
-    # Инициализируем список для результатов
-    results = []
-    
-    # Проходим по каждому хосту и выполняем команду
-    for host in host_list:
-        result = await connect_and_execute_paaswd(host, credentials, command)
-        results.append(result)
-    
-    # Возвращаем результаты выполнения команд на всех серверах
-    return {"results": results}
-
-# Маршрут FastAPI для выполнения команды через SSH на нескольких серверах
-@router.get("/execwithCert")
-async def execute(
-    hosts: str = Query(..., description="Список хостов через запятую, без пробела"), 
-    ports: int = 22, 
-    passphrase: str = Query(...),
-    pkkey: UploadFile = File(...),
-    command: str = 'ls -la'
-):
-    # Преобразуем строку хостов в список
-    host_list = hosts.split(',')
-
-    # Создаем словарь для параметров подключения
-    credentials = {
-        'port': ports,
-        'username': 'root',  # Убедитесь, что username правильный
-        # 'password': passwords
-    }
-    
-    # Инициализируем список для результатов
-    results = []
-    
-    # Проходим по каждому хосту и выполняем команду
-    for host in host_list:
-        result = connect_and_execute_paaswd(host, credentials, command, pkkey, passphrase)
-        results.append(result)
-    
-    # Возвращаем результаты выполнения команд на всех серверах
-    return {"results": results}
-
-# @router.post("/upload")
-# def upload(file: UploadFile = File(...)):
-#     try:
-#         with open(file.filename, 'wb') as f:
-#             shutil.copyfileobj(file.file, f)
-#     except Exception:
-#         return {"message": "There was an error uploading the file"}
-#     finally:
-#         file.file.close()
-        
-#     return {"message": f"Successfully uploaded {file.filename}"}
-# Маршрут для загрузки файла и отправки его на сервер
-@router.get("/hosts")
-def get_hosts(db: Session = Depends(get_db)):
-     # Выбираем только нужные поля из таблицы hosts
-        # Выполняем запрос с соединением таблиц
-    hosts = db.query(models.Hosts.ipadress, models.Hosts.port, models.Hosts.username, models.Hosts.password, models.Type.grouptype).join(models.Type, models.Hosts.grouptype_id == models.Type.id).all()
-    return hosts
-
-@router.get("/host_group", response_model=List[schemas.HostType])
-def get_type(db: Session = Depends(get_db)):
-     # Выбираем только нужные поля из таблицы hosts
-    type = db.query(models.Type.id, models.Type.grouptype).all()
-    return type
-
-@router.get("/host_group_network")
-def get_network_host(db: Session = Depends(get_db)):
-    # Фильтрация записей по значению hosttype (например, "Network")
-    cursor.execute("""
-    SELECT hosts.*
-    FROM hosts
-    JOIN type ON hosts.grouptype_id = type.id
-    WHERE type.grouptype = 'Network'
-""")
-    type = cursor.fetchall()
-    return type
-
-@router.get("/host_group_linux")
-def get_linux_host(db: Session = Depends(get_db)):
-    # Фильтрация записей по значению hosttype (например, "Network")
-    cursor.execute("""
-    SELECT hosts.*
-    FROM hosts
-    JOIN type ON hosts.grouptype_id = type.id
-    WHERE type.grouptype = 'Linux Hosts'
-""")
-    type = cursor.fetchall()
-    return type
-
-
-# @router.get("/host_group_linux")
-# def get_linux_host(db: Session = Depends(get_db)):
-#     # Фильтрация записей по значению hosttype (например, "Network")
-#     conn = 
-#     return types_with_hosts
-
-# @router.get("/host_group_filter")
-# def get_hosts_by_grouptype(db: Session, group_name: str):
-#     # Выполняем запрос для получения всех хостов, относящихся к указанной группе
-#     hosts = db.query(models.Hosts).join(models.Type).filter(models.Type.grouptype == group_name).all()
-#     return hosts
-
-@router.post("/uploadfile")
-async def upload_file_to_linux(
-    db: Session = Depends(get_db),
-    file: UploadFile = File(...),
-    # hosts: str = Query(...)
-    
-    ):
-    # host_list = hosts.split(',')
-    # Извлекаем хосты и их данные из базы данных
-    hosts = db.query(models.Hosts.id, models.Hosts.ipadress, models.Hosts.port, models.Hosts.username, models.Hosts.password).all()
-    ipadress_list = [host[1] for host in hosts]
-    ports = hosts[0][2]  # Извлекаем порт для первого хоста (если у всех хостов один порт)
-    username = hosts[0][3]  # Извлекаем имя пользователя для первого хоста
-    passwd = hosts[0][4]  # Извлекаем пароль
-
-    # print(f"Порты: {ports}, Имя пользователя: {username}, Пароль: {passwd}, IP адреса: {ipadress_list}")
-
-    # Сохраняем файл временно на сервере
-    local_file_path = f"./{file.filename}"
-    with open(local_file_path, "wb") as f:
-        f.write(await file.read())
-
-    # Создаем словарь для параметров подключения
-    credentials = {
-        'port': ports,
-        'username': username,
-        'password': passwd,
-    }
-
-    # Инициализируем список для результатов
-    results = []
-
-    # Последовательная отправка файла на каждый хост
-    for host in ipadress_list:
-        print(f"Отправка файла на сервер {host}")
-        
-        # Важно использовать await для последовательного выполнения
-        result = await upload_file_to_server(host, credentials, local_file_path)
-        
-        # Добавляем результат в список
-        results.append(result)
-        print(f"Загрузка на {host} завершена с результатом: {result}")
-
-    # Удаляем файл после завершения отправки
-    os.remove(local_file_path)
-
-    # Возвращаем результаты отправки файла на все сервера
-    return {"results": results}

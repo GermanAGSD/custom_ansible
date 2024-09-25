@@ -1,8 +1,46 @@
-from pydantic import BaseModel, EmailStr
+from pydantic import BaseModel, EmailStr, Field
 from datetime import datetime
 from typing import Optional
 
 from pydantic.types import conint
+
+class CreateHostGroup(BaseModel):
+    grouptype: str = Field(..., example="Linux")
+    description: str = Field(..., example="For Server")
+
+    class Config:
+        orm_mode = True
+
+class DeleteHostGroup(BaseModel):
+    id: int
+    # grouptype: str = Field(..., example="Linux")
+    # description: str = Field(..., example="For Server")
+
+    class Config:
+        orm_mode = True
+
+
+# Pydantic-схема для валидации входных данных
+class HostCreateSchema(BaseModel):
+    ipadress: str = Field(..., example="192.168.1.1")
+    port: str = Field(..., example="22")
+    username: str = Field(..., example="user")
+    password: str = Field(..., min_length=8, example="password123")
+    grouptype_id: int = Field(..., example=1)
+
+    class Config:
+        orm_mode = True
+
+# Pydantic-схема для валидации входных данных
+class HostFileSchema(BaseModel):
+    ipadress: str = Field(..., example="192.168.1.1")
+    # port: str = Field(..., example="22")
+    # username: str = Field(..., example="user")
+    # password: str = Field(..., min_length=8, example="password123")
+    # grouptype_id: int = Field(..., example=1)
+
+    class Config:
+        orm_mode = True
 
 # Создаем Pydantic-схему для возврата данных
 class HostResponse(BaseModel):
@@ -16,11 +54,21 @@ class HostResponse(BaseModel):
     class Config:
         orm_mode = True
 
-
+# Модель данных для запроса POST
+class HostCreate(BaseModel):
+    ipadress: str
+    port: str
+    username: str
+    password: str
+    grouptype_id: int
+    
+    class Config:
+        orm_mode = True
 # Создаем Pydantic-схему для возврата данных
 class HostType(BaseModel):
     id: int
     grouptype: str
+    description: str
 
 
     class Config:

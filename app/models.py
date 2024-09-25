@@ -8,7 +8,7 @@ from .database import Base
 class Hosts(Base):
     __tablename__ = "hosts"
     
-    id = Column(Integer, primary_key=True, nullable=False)
+    id = Column(Integer, primary_key=True, nullable=False, autoincrement=True)
     ipadress = Column(String, nullable=False)
     port = Column(String, nullable=False)
     username = Column(String, nullable=False)
@@ -16,16 +16,15 @@ class Hosts(Base):
     created = Column(TIMESTAMP(timezone=True), nullable=False, server_default=text('now()'))
     
     # Внешний ключ, ссылающийся на id таблицы Type
-    grouptype_id = Column(Integer, ForeignKey('type.id'), nullable=False)
+    grouptype_id = Column(Integer, ForeignKey('type.id'), nullable=True)
     
     # Отношение между Hosts и Type
     grouptype = relationship("Type", back_populates="hosts")
 
 class Type(Base):
     __tablename__ = "type"
-    
-    id = Column(Integer, primary_key=True, nullable=False)
+    id = Column(Integer, primary_key=True, autoincrement=True)
     grouptype = Column(String, nullable=False)
-    
+    description = Column(String, nullable=False)
     # Отношение к таблице Hosts
     hosts = relationship("Hosts", back_populates="grouptype")
