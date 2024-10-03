@@ -16,8 +16,10 @@ from sqlalchemy import text
 from .. schemas import HostResponse, HostCreateSchema, HostFileSchema, CreateHostGroup, DeleteHostGroup
 import os
 from pydantic import BaseModel, Field
-import io
-
+import io, asyncio
+import asyncio
+import paramiko
+from concurrent.futures import ThreadPoolExecutor
 router = APIRouter(
     prefix="/api/v1/ansible",
     tags=['ansible']
@@ -43,45 +45,59 @@ async def execute(
     }
     
     # Инициализируем список для результатов
-    results = []
+    # results = []
     
     # Проходим по каждому хосту и выполняем команду
-    for host in host_list:
-        result = await connect_and_execute_paaswd(host, credentials, command)
-        results.append(result)
+    # for host in host_list:
+    results = await run_command_on_hosts(host_list, credentials, command)
+        # results.append(result)
     
     # Возвращаем результаты выполнения команд на всех серверах
     return {"results": results}
 
-# Маршрут FastAPI для выполнения команды через SSH на нескольких серверах
+async def run_command_on_hosts(host_list, credentials, command):
+    loop = asyncio.get_event_loop()
+    with ThreadPoolExecutor() as executor:
+        tasks = [
+            loop.run_in_executor(
+                executor, connect_and_execute_paaswd, host, credentials, command
+            )
+            for host in host_list
+        ]
+        results = await asyncio.gather(*tasks)
+    return results
+
 @router.get("/execwithCert")
 async def execute(
     hosts: str = Query(..., description="Список хостов через запятую, без пробела"),
-    username: str = Query(..., description=""),
+    username: str = Query(..., description="Имя пользователя для SSH"),
     port: int = 22,
     command: str = 'ls -la'
 ):
     # Преобразуем строку хостов в список
     host_list = hosts.split(',')
 
-    # # Создаем словарь для параметров подключения
-    # credentials = {
-    #     'port': ports,
-    #     'username': 'root',  # Убедитесь, что username правильный
-    #     # 'password': passwords
-    # }
-    
-    # Инициализируем список для результатов
-    results = []
-    
-    # Проходим по каждому хосту и выполняем команду
-    for host in host_list:
-        result = await connect_with_local_certificate(host, port, username, command)
-        results.append(result)
-    
-    # Возвращаем результаты выполнения команд на всех серверах
-    print(results)
+    # Выполняем команду на всех серверах
+    results = await run_command_on_hosts_withcert(host_list, port, username, command)
+
+    # Убедимся, что результаты могут быть сериализованы в JSON
     return {"results": results}
+
+
+async def run_command_on_hosts_withcert(host_list, port, username, command):
+    loop = asyncio.get_event_loop()
+    with ThreadPoolExecutor(max_workers=5) as executor:
+        tasks = [
+            loop.run_in_executor(
+                executor, connect_with_local_certificate, host, port, username, command
+            )
+            for host in host_list
+        ]
+        # Ожидаем выполнения всех задач
+        results = await asyncio.gather(*tasks)
+    return results
+
+
 
 @router.post("/uploadfileWithCertificate")
 async def upload_file_to_linux_with_certificate(
@@ -186,16 +202,17 @@ async def upload_file_to_linux(
     return {"results": results}
 
 @router.get("/hosts")
-def get_hosts(db: Session = Depends(get_db)):
+async def get_hosts(db: Session = Depends(get_db)):
      # Выбираем только нужные поля из таблицы hosts
         # Выполняем запрос с соединением таблиц
+    # Выполняем запрос с использованием функции coalesce
     hosts = db.query(
         models.Hosts.ipadress,
         models.Hosts.port,
         models.Hosts.username,
         models.Hosts.password,
-        models.Type.grouptype,
-        models.Type.description
+        func.coalesce(models.Type.grouptype, 'No Group').label('grouptype'),
+        func.coalesce(models.Type.description, 'No Description').label('description')
     ).outerjoin(models.Type, models.Hosts.grouptype_id == models.Type.id).all()
 
     # if hosts.grouptype == null:
@@ -203,13 +220,13 @@ def get_hosts(db: Session = Depends(get_db)):
     return hosts
 
 @router.get("/host_group", response_model=List[schemas.HostType])
-def get_type(db: Session = Depends(get_db)):
+async def get_type(db: Session = Depends(get_db)):
      # Выбираем только нужные поля из таблицы hosts
     type = db.query(models.Type.id, models.Type.grouptype, models.Type.description).all()
     return type
 
 @router.get("/host_group_network")
-def get_network_host(db: Session = Depends(get_db)):
+async def get_network_host(db: Session = Depends(get_db)):
     # Фильтрация записей по значению hosttype (например, "Network")
     cursor.execute("""
     SELECT hosts.*
@@ -221,7 +238,7 @@ def get_network_host(db: Session = Depends(get_db)):
     return type
 
 @router.get("/host_group_linux")
-def get_linux_host(db: Session = Depends(get_db)):
+async def get_linux_host(db: Session = Depends(get_db)):
     # Фильтрация записей по значению hosttype (например, "Network")
     cursor.execute("""
     SELECT hosts.*
@@ -233,7 +250,7 @@ def get_linux_host(db: Session = Depends(get_db)):
     return type
     
 @router.post("/create_host_group")
-def create_host_group(host_group: CreateHostGroup, db: Session = Depends(get_db)):
+async def create_host_group(host_group: CreateHostGroup, db: Session = Depends(get_db)):
     try:
         new_group = models.Type(
             grouptype=host_group.grouptype,
@@ -249,7 +266,7 @@ def create_host_group(host_group: CreateHostGroup, db: Session = Depends(get_db)
         raise HTTPException(status_code=400, detail=f"An error occurred: {str(e)}")    
 
 @router.delete('/delete_group_type')
-def delete_group_type(del_group: DeleteHostGroup, db: Session = Depends(get_db)):
+async def delete_group_type(del_group: DeleteHostGroup, db: Session = Depends(get_db)):
     try:
         
         group = db.query(models.Type).filter(models.Type.id == del_group.id).first()
@@ -266,7 +283,7 @@ def delete_group_type(del_group: DeleteHostGroup, db: Session = Depends(get_db))
         raise HTTPException(status_code=400, detail=f"An error occurred: {str(e)}")  
 # Обработчик POST-запроса
 @router.post("/hosts")
-def create_host(host_data: HostCreateSchema, db: Session = Depends(get_db)):
+async def create_host(host_data: HostCreateSchema, db: Session = Depends(get_db)):
     try:
         # Хеширование пароля перед сохранением
         # hashed_password = bcrypt.hash(host_data.password)
@@ -296,41 +313,41 @@ def create_host(host_data: HostCreateSchema, db: Session = Depends(get_db)):
 
 # Обработчик POST-запроса
 # @router.get("/execWithcert")
-async def connect_with_local_certificate(hostname, port, username, command):
+def connect_with_local_certificate(hostname, port, username, command):
     """
-    Connects to the remote host using a certificate file in the same directory as the script.
-
+    Подключается к удаленному хосту с использованием локального сертификата
+    и выполняет команду.
+    
     Args:
-        hostname (str): The hostname or IP address of the remote server.
-        port (int): The port number to connect to (e.g., 22 for SSH).
-        username (str): The username for SSH login.
-        certificate_file (str): The name of the private key file located in the same directory as the script.
-        command (str): The command to execute on the remote server.
-        passphrase (str, optional): The passphrase for the private key (if encrypted). Default is None.
+        hostname (str): Имя хоста или IP-адрес.
+        port (int): Порт для подключения SSH.
+        username (str): Имя пользователя для SSH.
+        command (str): Команда для выполнения на удаленном сервере.
 
     Returns:
-        dict: A dictionary containing the command's output or an error message.
+        dict: Результаты выполнения команды или ошибка.
     """
     client = paramiko.SSHClient()
     client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-    certificate_file = 'badm_key'  # The private key file in the same directory
-    passphrase=None
+    certificate_file = 'badm_key'  # Имя файла сертификата
+    passphrase = None  # При необходимости можно задать passphrase для ключа
+    
     try:
-        # Get the full path of the certificate in the current directory
+        # Получаем полный путь к файлу сертификата
         cert_path = os.path.join(os.path.dirname(__file__), certificate_file)
 
-        # Load the private key from the certificate file in the current directory
+        # Загружаем приватный ключ из сертификата
         private_key = paramiko.RSAKey.from_private_key_file(cert_path, password=passphrase)
 
-        # Connect to the remote host
+        # Подключаемся к удаленному хосту
         client.connect(
-            hostname, 
+            hostname=hostname, 
             port=port, 
             username=username, 
             pkey=private_key
         )
 
-        # Execute the command
+        # Выполняем команду
         stdin, stdout, stderr = client.exec_command(command)
         output = stdout.read().decode().strip()
         errors = stderr.read().decode().strip()
@@ -352,6 +369,7 @@ async def connect_with_local_certificate(hostname, port, username, command):
     finally:
         client.close()
 
+
 # # Example usage
 # hostname = '10.0.2.42'
 # port = 22
@@ -364,7 +382,7 @@ async def connect_with_local_certificate(hostname, port, username, command):
 
 
 # Функция для подключения и выполнения команды на сервере
-async def connect_and_execute_paaswd(hostname, credentials, command):
+def connect_and_execute_paaswd(hostname, credentials, command):
     client = paramiko.SSHClient()
     client.set_missing_host_key_policy(paramiko.AutoAddPolicy())  # Автоматически добавлять ключи хоста
     
@@ -493,35 +511,3 @@ async def upload_file_to_server_with_cert(hostname, credentials, local_file_path
 
     finally:
         client.close()
-# Функция для подключения и загрузки файла на сервер по SFTP
-# async def upload_file_to_server_with_cert(hostname, port, username, local_file_path):
-#     client = paramiko.SSHClient()
-#     client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-#     certificate_file = 'badm_key'  # The private key file in the same directory
-#     passphrase=None
-#     remote_file_path = f"/{os.path.basename(local_file_path)}"
-#     try:
-#         # Get the full path of the certificate in the current directory
-#         cert_path = os.path.join(os.path.dirname(__file__), certificate_file)
-#         # Подключение с использованием сертификата
-#         private_key = paramiko.RSAKey.from_private_key_file(cert_path, password=passphrase)
-        
-#         client.connect(
-#             hostname, 
-#             port=port, 
-#             username=username, 
-#             pkey=private_key
-#         )
-
-#         # Подключаем SFTP сессию
-#         sftp = client.open_sftp()
-        
-#         # Отправка файла
-#         sftp.put(local_file_path, remote_file_path)
-#         sftp.close()
-
-#         return {'hostname': hostname, 'status': 'success', 'message': f'File uploaded to {hostname}'}
-#     except Exception as e:
-#         return {'hostname': hostname, 'status': 'error', 'error': str(e)}
-#     finally:
-#         client.close()
