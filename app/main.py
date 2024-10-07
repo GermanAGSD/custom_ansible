@@ -3,7 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from . import models
 from .database import engine
-from .routers import ansible
+from .routers import ansible, users
 from .config import settings
 
 
@@ -21,7 +21,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 app.include_router(ansible.router)
-# app.include_router(sse_stream.router)
+app.include_router(users.router)
 # app.include_router(user.router)
 # app.include_router(auth.router)
 # app.include_router(vote.router)

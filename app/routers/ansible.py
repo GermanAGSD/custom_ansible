@@ -346,6 +346,8 @@ def connect_with_local_certificate(hostname, port, username, command):
             username=username, 
             pkey=private_key
         )
+        # Минимальный и Максимальный таймаут
+
 
         # Выполняем команду
         stdin, stdout, stderr = client.exec_command(command)

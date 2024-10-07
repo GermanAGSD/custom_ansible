@@ -4,6 +4,14 @@ from typing import Optional
 
 from pydantic.types import conint
 
+
+class LdapUsers(BaseModel):
+    username: str
+    password: str
+
+    class Config:
+        orm_mode: True
+
 class CreateHostGroup(BaseModel):
     grouptype: str = Field(..., example="Linux")
     description: str = Field(..., example="For Server")
