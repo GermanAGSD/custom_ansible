@@ -133,7 +133,7 @@ class UserLogin(BaseModel):
 class Token(BaseModel):
     access_token: str
     token_type: str
-
+    groups: Optional[str] = []
 
 class TokenData(BaseModel):
     id: Optional[str] = None

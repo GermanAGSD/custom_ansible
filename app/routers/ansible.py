@@ -150,6 +150,7 @@ async def upload_file_to_linux_with_certificate(
     # Возвращаем результаты отправки файла на все сервера
     return {"results": results}
 
+
 @router.post("/uploadfile")
 async def upload_file_to_linux(
     db: Session = Depends(get_db),
@@ -339,15 +340,14 @@ def connect_with_local_certificate(hostname, port, username, command):
         # Загружаем приватный ключ из сертификата
         private_key = paramiko.RSAKey.from_private_key_file(cert_path, password=passphrase)
 
-        # Подключаемся к удаленному хосту
+        # Подключаемся к удаленному хосту с таймаутом 3 секунды
         client.connect(
             hostname=hostname, 
             port=port, 
             username=username, 
-            pkey=private_key
+            pkey=private_key,
+            timeout=5  # Таймаут подключения 3 секунды
         )
-        # Минимальный и Максимальный таймаут
-
 
         # Выполняем команду
         stdin, stdout, stderr = client.exec_command(command)

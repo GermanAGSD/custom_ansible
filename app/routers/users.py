@@ -39,12 +39,12 @@ LDAP_PASSWORD = 'Nhb;ls<sr-3'
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl='login')
 SECRET_KEY = "my_secret_key"  # Make sure this is kept safe and not exposed
 ALGORITHM = "HS256"
-ACCESS_TOKEN_EXPIRE_DAYS = 30
+ACCESS_TOKEN_EXPIRE_DAYS = 90
 
 
 def create_access_token(data: dict):
     to_encode = data.copy()
-    expire = datetime.utcnow() + timedelta(minutes=ACCESS_TOKEN_EXPIRE_DAYS)
+    expire = datetime.utcnow() + timedelta(days=ACCESS_TOKEN_EXPIRE_DAYS)
     to_encode.update({"exp": expire})
     encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
     return encoded_jwt
@@ -70,25 +70,42 @@ def get_current_user(token: str = Depends(oauth2_scheme), db: Session = Depends(
     return user
 
 
-@router.post("/login", response_model=schemas.Token)
-async def login_for_access_token(ldap_user: schemas.LdapUsers, db: Session = Depends(database.get_db)):
+@router.post("/login")
+async def login_for_access_token(
+    username: str = Form(...),
+    password: str = Form(...),
+    db: Session = Depends(database.get_db)):
     server = Server(LDAP_SERVER, get_info=ALL)
     conn = Connection(server, LDAP_BIND_DN, LDAP_PASSWORD, auto_bind=True)
 
-    search_filter = f"(sAMAccountName={ldap_user.username})"
-    conn.search('DC=bull,DC=local', search_filter, SUBTREE, attributes=['cn', 'mail'])
+    # Поиск пользователя по sAMAccountName
+    search_filter = f"(sAMAccountName={username})"
+    conn.search('DC=bull,DC=local', search_filter, SUBTREE, attributes=['cn', 'mail', 'memberOf'])
 
     if len(conn.entries) == 0:
         raise HTTPException(status_code=404, detail="User not found")
 
     user_dn = conn.entries[0].entry_dn
-    user_conn = Connection(server, user_dn, ldap_user.password, authentication=SIMPLE)
+    user_conn = Connection(server, user_dn, password, authentication=SIMPLE)
     
     if not user_conn.bind():
         raise HTTPException(status_code=401, detail="Invalid credentials")
+    
+    # Проверяем наличие атрибута 'memberOf'
+    if 'memberOf' in conn.entries[0]:
+        groups = conn.entries[0].memberOf.values if hasattr(conn.entries[0].memberOf, 'values') else []
+    else:
+        groups = []  # Если атрибута нет, возвращаем пустой список или можно задать значение по умолчанию
 
+    # Создание токена
     access_token = create_access_token(data={"user_id": user_dn})
-    return {"access_token": access_token, "token_type": "bearer"}
+    # print(groups)
+    return {
+        "access_token": access_token, 
+        "token_type": "bearer",
+        "groups": groups,
+    }
+
 
 
 @router.get("/me/")
